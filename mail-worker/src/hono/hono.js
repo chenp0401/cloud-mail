@@ -4,7 +4,23 @@ const app = new Hono();
 import result from '../model/result';
 import { cors } from 'hono/cors';
 
-app.use('*', cors());
+// 安全加固：原为 cors()（等价 Access-Control-Allow-Origin: *）。
+// 收敛为「仅放行同源」—— 服务端调用不带 Origin，不受影响；公网任意站点不再拿到 CORS 头。
+app.use('*', cors({
+	origin: (origin, c) => {
+		if (!origin) return null;
+		try {
+			const o = new URL(origin);
+			const host = c.req.header('host') || '';
+			return o.host === host ? origin : null;
+		} catch (e) {
+			return null;
+		}
+	},
+	allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+	allowHeaders: ['Content-Type', 'Authorization'],
+	credentials: true
+}));
 
 app.onError((err, c) => {
 	if (err.name === 'BizError') {

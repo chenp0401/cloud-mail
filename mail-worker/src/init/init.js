@@ -3,11 +3,15 @@ import emailUtils from '../utils/email-utils';
 import {emailConst} from "../const/entity-const";
 
 const dbInit = {
-	async init(c) {
+	async init(c, secret) {
 
-		const secret = c.req.param('secret');
+		// 密钥优先取请求头 X-Init-Secret（避免出现在 URL / 访问日志 / 浏览器历史里），
+		// 兼容旧调用方传来的路径参数。
+		if (!secret) {
+			secret = c.req.param('secret');
+		}
 
-		if (secret !== c.env.jwt_secret) {
+		if (!secret || secret !== c.env.jwt_secret) {
 			return c.text('❌ JWT secret mismatch');
 		}
 
@@ -32,8 +36,18 @@ const dbInit = {
 		await this.v3_1DB(c);
 		await this.v3_2DB(c);
 		await this.v3_3DB(c);
+		await this.v3_4DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+	// 新增：Resend webhook 签名密钥（用于校验 /api/webhooks 的 Svix 签名）
+	async v3_4DB(c) {
+		try {
+			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN resend_webhook_secret TEXT NOT NULL DEFAULT ''`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
 	},
 
 	async v3_3DB(c) {
