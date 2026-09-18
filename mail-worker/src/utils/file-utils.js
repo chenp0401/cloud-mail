@@ -14,6 +14,25 @@ const fileUtils = {
 		return hashArray.slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
 	},
 
+	// 密钥派生的对象键名。
+	// 原来的 getBuffHash 是 SHA-256(内容)：附件 URL 形如 /attachments/<sha256前32位>.bin，
+	// 而该路径在 index.js 里是匿名可读的 —— 攻击者只要知道（或猜到）文件内容，
+	// 就能自己算出键名直接下载，不需要任何凭证。
+	// 改用 HMAC(密钥, 内容) 后：键名仍由内容决定（内容相同的附件依旧去重，不浪费 KV 配额），
+	// 但没有密钥的外部方无法从内容反推键名。
+	async getSecretHash(buff, secret) {
+		const key = await crypto.subtle.importKey(
+			'raw',
+			new TextEncoder().encode(String(secret || '')),
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			['sign']
+		);
+		const sigBuffer = await crypto.subtle.sign('HMAC', key, buff);
+		const sigArray = Array.from(new Uint8Array(sigBuffer));
+		return sigArray.slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
+	},
+
 	base64ToDataStr(base64) {
 		return base64.split(',')[1] || base64;
 	},
