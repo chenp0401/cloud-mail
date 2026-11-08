@@ -57,10 +57,6 @@ const dbInit = {
 		}
 	},
 
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
-	},
 
 	async v3_3DB(c) {
 		try {
