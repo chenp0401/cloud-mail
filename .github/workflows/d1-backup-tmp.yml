@@ -28,7 +28,7 @@ jobs:
         working-directory: ./mail-worker
         run: |
           pnpm wrangler telemetry disable || true
-          pnpm wrangler d1 execute "$NAME" --remote --command "DELETE FROM attachments WHERE email_id IN (SELECT email_id FROM email WHERE email_id = 271 AND subject = '[E2E] v3.4.0 attachment key derivation'); DELETE FROM star WHERE email_id IN (SELECT email_id FROM email WHERE email_id = 271 AND subject = '[E2E] v3.4.0 attachment key derivation'); DELETE FROM email WHERE email_id = 271 AND subject = '[E2E] v3.4.0 attachment key derivation';"
+          pnpm wrangler d1 execute "$NAME" --remote --command "DELETE FROM attachments WHERE email_id IN (SELECT email_id FROM email WHERE subject = '[E2E] v3.4.0 attachment key derivation'); DELETE FROM star WHERE email_id IN (SELECT email_id FROM email WHERE subject = '[E2E] v3.4.0 attachment key derivation'); DELETE FROM email WHERE subject = '[E2E] v3.4.0 attachment key derivation';"
           echo "--- cleanup verify ---"
           pnpm wrangler d1 execute "$NAME" --remote --json --command "SELECT count(*) AS total FROM email; SELECT count(*) AS e2e_left FROM email WHERE subject = '[E2E] v3.4.0 attachment key derivation';"
       - name: Export D1
