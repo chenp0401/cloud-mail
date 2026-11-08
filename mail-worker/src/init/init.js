@@ -41,10 +41,22 @@ const dbInit = {
 		return c.text('success');
 	},
 
-	// 新增：Resend webhook 签名密钥（用于校验 /api/webhooks 的 Svix 签名）
+	// 本地加固：Resend webhook 签名密钥（校验 /api/webhooks 的 Svix 签名）
+	// 上游 v3.4.0：显示收件代发地址 sender_email
 	async v3_4DB(c) {
 		try {
 			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN resend_webhook_secret TEXT NOT NULL DEFAULT ''`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+
+		try {
+			await c.env.db.prepare(`ALTER TABLE email ADD COLUMN sender_email TEXT NOT NULL DEFAULT '';`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+	},
+
 		} catch (e) {
 			console.warn(`跳过字段：${e.message}`);
 		}
