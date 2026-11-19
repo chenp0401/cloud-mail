@@ -223,10 +223,18 @@ const loginService = {
 
 	async login(c, params, noVerifyPwd = false) {
 
-		const { email, password } = params;
+		const { email, password, token } = params;
 
 		if ((!email || !password) && !noVerifyPwd) {
 			throw new BizError(t('emailAndPwdEmpty'));
+		}
+
+		if (!noVerifyPwd) {
+			const { loginVerify, loginVerifyCount = 1 } = await settingService.query(c);
+			if (loginVerify === settingConst.loginVerify.OPEN ||
+				(loginVerify === settingConst.loginVerify.COUNT && !await verifyRecordService.consumeLoginAttempt(c, loginVerifyCount))) {
+				await turnstileService.verify(c, token);
+			}
 		}
 
 		const userRow = await userService.selectByEmailIncludeDel(c, email);
@@ -248,7 +256,7 @@ const loginService = {
 		}
 
 		const uuid = uuidv4();
-		const jwt = await JwtUtils.generateToken(c,{ userId: userRow.userId, token: uuid });
+		const jwt = await JwtUtils.generateToken(c,{ userId: userRow.userId, token: uuid, gen: constant.AUTH_GEN });
 
 		let authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userRow.userId, { type: 'json' });
 
@@ -279,11 +287,11 @@ const loginService = {
 	},
 
 	async logout(c, userId) {
-		const token =userContext.getToken(c);
+		const token = await userContext.getToken(c);
 		const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userId, { type: 'json' });
 		const index = authInfo.tokens.findIndex(item => item === token);
 		authInfo.tokens.splice(index, 1);
-		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo));
+		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo), { expirationTtl: constant.TOKEN_EXPIRE });
 	}
 
 };
