@@ -1,0 +1,87 @@
+name: cf-quota-audit-temp
+on:
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Cloudflare quota usage
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python3 - <<'PY' > quota.json
+          import os, json, datetime, urllib.request, urllib.error
+          TOKEN = os.environ.get("CF_TOKEN", "")
+          ACCT = os.environ.get("CF_ACCT", "")
+          now = datetime.datetime.now(datetime.timezone.utc)
+          day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+          d24 = now - datetime.timedelta(days=1)
+          d3date = (now - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+          nowdate = now.strftime("%Y-%m-%d")
+          def gql(query, variables):
+              req = urllib.request.Request(
+                  "https://api.cloudflare.com/client/v4/graphql",
+                  data=json.dumps({"query": query, "variables": variables}).encode(),
+                  headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=45) as r:
+                      return json.load(r)
+              except urllib.error.HTTPError as e:
+                  return {"http_error": e.code, "body": e.read().decode()[:1500]}
+              except Exception as e:
+                  return {"error": repr(e)}
+          def rest(path):
+              req = urllib.request.Request(
+                  "https://api.cloudflare.com/client/v4" + path,
+                  headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=45) as r:
+                      j = json.load(r)
+                      res = j.get("result")
+                      if isinstance(res, list):
+                          return {"count": len(res), "items": res[:80]}
+                      return res
+              except urllib.error.HTTPError as e:
+                  return {"http_error": e.code, "body": e.read().decode()[:800]}
+              except Exception as e:
+                  return {"error": repr(e)}
+          W = """query($a:string!,$s:string!,$e:string!){viewer{accounts(filter:{accountTag:$a}){
+          workersInvocationsAdaptive(limit:2000,filter:{datetime_geq:$s,datetime_leq:$e}){
+          sum{requests errors subrequests} dimensions{scriptName}}}}}"""
+          D = """query($a:string!,$s:Date!,$e:Date!){viewer{accounts(filter:{accountTag:$a}){
+          d1AnalyticsAdaptiveGroups(limit:2000,filter:{date_geq:$s,date_leq:$e}){
+          sum{rowsRead rowsWritten readQueries writeQueries} dimensions{date databaseId}}}}}"""
+          T = """query($a:string!){viewer{accounts(filter:{accountTag:$a}){__typename}}}"""
+          F = """query($n:String!){__type(name:$n){name fields{name}}}"""
+          tn = gql(T, {"a": ACCT})
+          typename = None
+          try:
+              typename = tn["data"]["viewer"]["accounts"][0]["__typename"]
+          except Exception:
+              pass
+          fields = gql(F, {"n": typename}) if typename else {"skipped": True}
+          do_fields = []
+          try:
+              do_fields = [x["name"] for x in fields["data"]["__type"]["fields"]
+                           if "durable" in x["name"].lower() or "object" in x["name"].lower()]
+          except Exception:
+              pass
+          out = {
+            "generated_utc": now.isoformat(),
+            "day_start_utc": day_start.isoformat(),
+            "workers_today_utc": gql(W, {"a": ACCT, "s": day_start.isoformat(), "e": now.isoformat()}),
+            "workers_last24h": gql(W, {"a": ACCT, "s": d24.isoformat(), "e": now.isoformat()}),
+            "d1_last3d": gql(D, {"a": ACCT, "s": d3date, "e": nowdate}),
+            "accounts_typename": tn,
+            "do_candidate_fields": do_fields,
+            "scripts": rest("/accounts/" + ACCT + "/workers/scripts"),
+            "d1_databases": rest("/accounts/" + ACCT + "/d1/database"),
+            "kv_namespaces": rest("/accounts/" + ACCT + "/storage/kv/namespaces"),
+          }
+          print(json.dumps(out, ensure_ascii=False, indent=1))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cf-quota
+          path: quota.json
