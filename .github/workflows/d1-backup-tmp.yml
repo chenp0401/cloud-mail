@@ -32,10 +32,13 @@ jobs:
           pnpm wrangler d1 execute "$NAME" --remote --command "DELETE FROM attachments WHERE email_id IN (SELECT email_id FROM email WHERE subject = '$SUBJECT'); DELETE FROM star WHERE email_id IN (SELECT email_id FROM email WHERE subject = '$SUBJECT'); DELETE FROM email WHERE subject = '$SUBJECT';"
           echo "--- cleanup verify ---"
           pnpm wrangler d1 execute "$NAME" --remote --json --command "SELECT count(*) AS total FROM email; SELECT count(*) AS e2e_left FROM email WHERE subject = '$SUBJECT';"
-          KV_ID=$(pnpm wrangler kv namespace list --json 2>/dev/null | jq -r --arg n "$NAME" '.[] | select(.title == $n) | .id' | head -1)
+          KV_RAW=$(pnpm wrangler kv namespace list 2>&1)
+          echo "--- kv namespace list (tail) ---"
+          echo "$KV_RAW" | tail -20
+          KV_ID=$(echo "$KV_RAW" | jq -r --arg n "$NAME" '[.. | objects | select(.title? == $n) | .id?] | map(select(. != null)) | .[0] // empty' 2>/dev/null)
           echo "kv_namespace=$KV_ID"
           if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
-            pnpm wrangler kv key delete "attachments/0bb1369d314cdb4ed4e320f4099868ee.txt" --namespace-id "$KV_ID" || true
+            pnpm wrangler kv key delete "attachments/0bb1369d314cdb4ed4e320f4099868ee.txt" --namespace-id "$KV_ID" 2>&1 || true
           fi
       - name: Pre-upgrade table baseline
         working-directory: ./mail-worker
