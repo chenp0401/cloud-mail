@@ -5,87 +5,41 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Query Cloudflare Durable Objects usage
+      - name: Query DO usage
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          python3 - <<'PY' > do-quota.json
+          python3 - <<'PY' > do2.json
           import os, json, datetime, urllib.request, urllib.error
-          TOKEN = os.environ.get("CF_TOKEN", "")
-          ACCT = os.environ.get("CF_ACCT", "")
+          T = os.environ["CF_TOKEN"]; A = os.environ["CF_ACCT"]
           now = datetime.datetime.now(datetime.timezone.utc)
-          day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-          def gql(query, variables=None):
-              req = urllib.request.Request(
-                  "https://api.cloudflare.com/client/v4/graphql",
-                  data=json.dumps({"query": query, "variables": variables or {}}).encode(),
-                  headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+          s = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+          e = now.strftime("%Y-%m-%d")
+          def gql(q):
+              r = urllib.request.Request("https://api.cloudflare.com/client/v4/graphql",
+                data=json.dumps({"query": q}).encode(),
+                headers={"Authorization": "Bearer " + T, "Content-Type": "application/json"})
               try:
-                  with urllib.request.urlopen(req, timeout=60) as r:
-                      return json.load(r)
-              except urllib.error.HTTPError as e:
-                  return {"http_error": e.code, "body": e.read().decode()[:1200]}
-              except Exception as e:
-                  return {"error": repr(e)}
-          def rest(path):
-              req = urllib.request.Request(
-                  "https://api.cloudflare.com/client/v4" + path,
-                  headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+                with urllib.request.urlopen(r, timeout=60) as x: return json.load(x)
+              except urllib.error.HTTPError as x: return {"http_error": x.code, "body": x.read().decode()[:600]}
+              except Exception as x: return {"error": repr(x)}
+          base = 'query($a:string!,$s:Date!,$e:Date!){viewer{accounts(filter:{accountTag:$a}){%s}}}'
+          q1 = base % '''inv(filter:{date_geq:$s,date_leq:$e},limit:1000){
+          sum{requests} dimensions{namespaceId scriptName date}}'''
+          q2 = base % '''inv2:durableObjectsInvocationsAdaptiveGroups(filter:{date_geq:$s,date_leq:$e},limit:1000){
+          sum{requests wallTime} dimensions{namespaceId scriptName date}}'''
+          q3 = base % '''per:durableObjectsPeriodicGroups(filter:{date_geq:$s,date_leq:$e},limit:1000){
+          sum{cpuTime} dimensions{namespaceId scriptName date}}'''
+          def run(q):
+              r = urllib.request.Request("https://api.cloudflare.com/client/v4/graphql",
+                data=json.dumps({"query": q, "variables": {"a": A, "s": s, "e": e}}).encode(),
+                headers={"Authorization": "Bearer " + T, "Content-Type": "application/json"})
               try:
-                  with urllib.request.urlopen(req, timeout=45) as r:
-                      return json.load(r).get("result")
-              except Exception as e:
-                  return {"error": repr(e)}
-          schema = gql("query { __schema { types { name fields { name type { name kind ofType { name kind } } } } } }")
-          relevant = []
-          try:
-              for t in schema["data"]["__schema"]["types"]:
-                  if "durableobjects" in (t.get("name") or "").lower():
-                      relevant.append({"type": t["name"], "fields": [f["name"] for f in (t.get("fields") or [])]})
-          except Exception as e:
-              relevant = [{"schema_error": repr(e), "raw": str(schema)[:500]}]
-          sum_field_names = []
-          for t in relevant:
-              if t.get("type") == "DurableObjectsInvocationsAdaptiveGroups":
-                  fl = None
-                  try:
-                      fl = gql('query { __type(name: "DurableObjectsInvocationsAdaptiveGroups") { fields { name type { name kind ofType { name kind } } } } }')
-                      for f in fl["data"]["__type"]["fields"]:
-                          if f["name"] == "sum":
-                              st = f["type"].get("ofType") or f["type"]
-                              sn = st.get("name")
-                              if sn:
-                                  sf = gql('query($n:String!){__type(name:$n){fields{name}}}', {"n": sn})
-                                  sum_field_names = [x["name"] for x in sf["data"]["__type"]["fields"]]
-                  except Exception as e:
-                      sum_field_names = [{"err": repr(e), "raw": str(fl)[:500]}]
-          dur = None
-          for cand in ("duration", "durationMs", "wallTime"):
-              if isinstance(sum_field_names, list) and cand in sum_field_names:
-                  dur = cand
-                  break
-          q = """query($a:string!,$s:string!,$e:string!){viewer{accounts(filter:{accountTag:$a}){
-          durableObjectsInvocationsAdaptiveGroups(limit:2000,filter:{datetime_geq:$s,datetime_leq:$e}){
-          sum{requests %s} dimensions{className}}}}}""" % (dur or "")
-          usage = gql(q, {"a": ACCT, "s": day_start.isoformat(), "e": now.isoformat()})
-          scripts = rest("/accounts/" + ACCT + "/workers/scripts") or []
-          crons = {}
-          for s in scripts:
-              nm = s.get("id") or s.get("name")
-              if nm:
-                  crons[nm] = rest("/accounts/" + ACCT + "/workers/scripts/" + nm + "/triggers/cron")
-          print(json.dumps({
-              "generated_utc": now.isoformat(),
-              "do_sum_fields": sum_field_names,
-              "do_duration_field_used": dur,
-              "do_usage_today_utc": usage,
-              "script_names": [s.get("id") or s.get("name") for s in scripts],
-              "crons": crons,
-              "relevant_types": [r for r in relevant if r.get("type", "").startswith("DurableObjects")][:40]
-          }, ensure_ascii=False, indent=1))
+                with urllib.request.urlopen(r, timeout=60) as x: return json.load(x)
+              except urllib.error.HTTPError as x: return {"http_error": x.code, "body": x.read().decode()[:600]}
+              except Exception as x: return {"error": repr(x)}
+          print(json.dumps({"range": [s, e], "q1": run(q1), "q2": run(q2), "q3": run(q3)}, ensure_ascii=False, indent=1))
           PY
       - uses: actions/upload-artifact@v4
-        with:
-          name: do-quota
-          path: do-quota.json
+        with: { name: do2, path: do2.json }
