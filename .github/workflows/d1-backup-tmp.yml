@@ -24,6 +24,19 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
         working-directory: ./mail-worker
+      - name: Cleanup E2E test data
+        working-directory: ./mail-worker
+        run: |
+          pnpm wrangler telemetry disable || true
+          SUBJECT='[E2E] v3.6.0 attachment key derivation'
+          pnpm wrangler d1 execute "$NAME" --remote --command "DELETE FROM attachments WHERE email_id IN (SELECT email_id FROM email WHERE subject = '$SUBJECT'); DELETE FROM star WHERE email_id IN (SELECT email_id FROM email WHERE subject = '$SUBJECT'); DELETE FROM email WHERE subject = '$SUBJECT';"
+          echo "--- cleanup verify ---"
+          pnpm wrangler d1 execute "$NAME" --remote --json --command "SELECT count(*) AS total FROM email; SELECT count(*) AS e2e_left FROM email WHERE subject = '$SUBJECT';"
+          KV_ID=$(pnpm wrangler kv namespace list --json 2>/dev/null | jq -r --arg n "$NAME" '.[] | select(.title == $n) | .id' | head -1)
+          echo "kv_namespace=$KV_ID"
+          if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
+            pnpm wrangler kv key delete "attachments/0bb1369d314cdb4ed4e320f4099868ee.txt" --namespace-id "$KV_ID" || true
+          fi
       - name: Pre-upgrade table baseline
         working-directory: ./mail-worker
         run: |
