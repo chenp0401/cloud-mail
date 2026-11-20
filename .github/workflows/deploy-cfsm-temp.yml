@@ -65,7 +65,7 @@ jobs:
           name = "METRICS_BROADCASTER"
           class_name = "MetricsBroadcaster"
           [[migrations]]
-          tag = "v1"
+          tag = "v2"
           new_sqlite_classes = ["MetricsBroadcaster"]
           [vars]
           API_SECRET = "$API_SECRET"
