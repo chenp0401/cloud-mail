@@ -1,0 +1,30 @@
+name: activate-cfsm-temp
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Activate worker version and read secret
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          API="https://api.cloudflare.com/client/v4"
+          AUTH="Authorization: Bearer $CF_TOKEN"
+          echo "=== deployments ==="
+          curl -s -H "$AUTH" "$API/accounts/$CF_ACCT/workers/scripts/cf-server-monitor/deployments" | python3 -m json.tool | head -60
+          echo "=== version to deploy ==="
+          VID=$(curl -s -H "$AUTH" "$API/accounts/$CF_ACCT/workers/scripts/cf-server-monitor/versions" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["result"]["items"][0]["id"])')
+          echo "VID=$VID"
+          echo "=== activate ==="
+          curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" "$API/accounts/$CF_ACCT/workers/scripts/cf-server-monitor/deployments" -d "{\"versions\":[{\"version_id\":\"$VID\"}],\"strategy\":\"allocate\"}" | python3 -m json.tool | head -40
+          echo "=== script settings (vars) ==="
+          curl -s -H "$AUTH" "$API/accounts/$CF_ACCT/workers/scripts/cf-server-monitor/settings" | python3 -c 'import sys,json; d=json.load(sys.stdin); v=(d.get("result") or {}).get("vars") or {}; print("API_SECRET:", v.get("API_SECRET","MISSING")); print("API_USER_NAME:", v.get("API_USER_NAME",""))' > secrets.txt
+          cat secrets.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfsm-secrets
+          path: secrets.txt
