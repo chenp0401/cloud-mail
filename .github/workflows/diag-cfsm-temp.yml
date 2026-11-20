@@ -1,0 +1,20 @@
+name: diag-cfsm-temp
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose CF account
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "=== scripts ==="
+          curl -sf -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCT/workers/scripts" | python3 -c 'import sys,json; d=json.load(sys.stdin); print([x["id"] for x in d["result"]]); print("cfsm?", [x for x in d["result"] if "server-monitor" in x["id"]])'
+          echo "=== workers.dev subdomain ==="
+          curl -s -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCT/workers/workers.dev" | python3 -m json.tool | head -30
+          echo "=== zones ==="
+          curl -sf -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/zones" | python3 -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"],x["id"]) for x in d["result"]])'
