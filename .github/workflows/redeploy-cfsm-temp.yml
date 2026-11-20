@@ -1,0 +1,64 @@
+name: redeploy-cfsm-temp
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: chenp0401/CF-Server-Monitor
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install && npm run build:frontend
+      - name: Redeploy and save secret
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -uo pipefail
+          API="https://api.cloudflare.com/client/v4"
+          AUTH="Authorization: Bearer $CF_TOKEN"
+          D1_ID=$(curl -sf -H "$AUTH" "$API/accounts/$CF_ACCT/d1/database" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((x["uuid"] for x in d["result"] if x["name"]=="server-monitor-db"),""))')
+          API_SECRET=$(openssl rand -hex 32)
+          cat > wrangler.toml <<EOF
+          name = "cf-server-monitor"
+          main = "src/index.js"
+          compatibility_date = "2024-12-01"
+          compatibility_flags = ["nodejs_compat"]
+          keep_vars = true
+          workers_dev = false
+          [triggers]
+          crons = ["*/1 * * * *", "0 * * * *"]
+          [assets]
+          directory = "./dist"
+          binding = "ASSETS"
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "server-monitor-db"
+          database_id = "$D1_ID"
+          [[durable_objects.bindings]]
+          name = "METRICS_BROADCASTER"
+          class_name = "MetricsBroadcaster"
+          [[migrations]]
+          tag = "v2"
+          new_sqlite_classes = ["MetricsBroadcaster"]
+          [vars]
+          API_SECRET = "$API_SECRET"
+          API_USER_NAME = "admin"
+          CORS_ALLOWED_ORIGINS = ""
+          EOF
+          export CLOUDFLARE_API_TOKEN="$CF_TOKEN"
+          export CLOUDFLARE_ACCOUNT_ID="$CF_ACCT"
+          npx wrangler@4 deploy > deploy.log 2>&1 || true
+          grep -E 'Uploaded cf-server-monitor|Success|ERROR|error' deploy.log | tail -8
+          echo "API_SECRET=$API_SECRET" | tee secret.txt
+          echo "D1_ID=$D1_ID" | tee -a secret.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfsm-final-secret
+          path: secret.txt
