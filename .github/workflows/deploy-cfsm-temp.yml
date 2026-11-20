@@ -20,23 +20,28 @@ jobs:
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ZONE: f913b88cc02e935bed4be52d84b9050d
+          HOST: monitor.uctest.cn
         run: |
           set -euo pipefail
+          API="https://api.cloudflare.com/client/v4"
+          AUTH="Authorization: Bearer $CF_TOKEN"
           # 1. find or create D1
-          D1_ID=$(curl -sf -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCT/d1/database" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((x["uuid"] for x in d["result"] if x["name"]=="server-monitor-db"), ""))')
+          D1_ID=$(curl -sf -H "$AUTH" "$API/accounts/$CF_ACCT/d1/database" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((x["uuid"] for x in d["result"] if x["name"]=="server-monitor-db"), ""))')
           if [ -z "$D1_ID" ]; then
-            D1_ID=$(curl -sf -X POST -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCT/d1/database" -d '{"name":"server-monitor-db"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["uuid"])')
+            D1_ID=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" "$API/accounts/$CF_ACCT/d1/database" -d '{"name":"server-monitor-db"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["uuid"])')
           fi
           echo "D1_ID=$D1_ID"
           # 2. generate strong secret
           API_SECRET=$(openssl rand -hex 32)
-          # 3. write wrangler.toml
+          # 3. write wrangler.toml — no workers.dev, use custom domain route
           cat > wrangler.toml <<EOF
           name = "cf-server-monitor"
           main = "src/index.js"
           compatibility_date = "2024-12-01"
           compatibility_flags = ["nodejs_compat"]
           keep_vars = true
+          workers_dev = false
           [triggers]
           crons = ["*/1 * * * *", "0 * * * *"]
           [assets]
@@ -62,14 +67,27 @@ jobs:
           export CLOUDFLARE_ACCOUNT_ID="$CF_ACCT"
           npx wrangler@4 deploy > deploy.log 2>&1 || { cat deploy.log; exit 1; }
           tail -20 deploy.log
-          # 5. workers.dev url
-          SUB=$(curl -sf -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCT/workers/workers.dev" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["subdomain"])')
-          URL="https://cf-server-monitor.$SUB.workers.dev"
-          python3 - "$URL" "$API_SECRET" "$D1_ID" <<'PY' > result.json
+          # 5. DNS: CNAME host -> @ (proxied) if absent
+          DNS=$(curl -sf -H "$AUTH" "$API/zones/$ZONE/dns_records?name=$HOST" | python3 -c 'import sys,json; print(next((x["id"] for x in json.load(sys.stdin)["result"] if x["name"]=="monitor.uctest.cn"), ""))')
+          if [ -z "$DNS" ]; then
+            echo "Creating DNS CNAME $HOST -> uctest.cn"
+            curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" "$API/zones/$ZONE/dns_records" -d "{\"type\":\"CNAME\",\"name\":\"$HOST\",\"content\":\"uctest.cn\",\"proxied\":true,\"ttl\":1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("DNS result:", d.get("success"), d.get("result",{}).get("id"), d.get("errors"))'
+          else
+            echo "DNS already exists: $DNS"
+          fi
+          # 6. Worker route
+          ROUTE=$(curl -sf -H "$AUTH" "$API/zones/$ZONE/workers/routes" | python3 -c 'import sys,json; print(next((x["id"] for x in json.load(sys.stdin)["result"] if x.get("pattern")=="monitor.uctest.cn/*"), ""))')
+          if [ -z "$ROUTE" ]; then
+            echo "Creating route monitor.uctest.cn/* -> cf-server-monitor"
+            curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" "$API/zones/$ZONE/workers/routes" -d '{"pattern":"monitor.uctest.cn/*","script":"cf-server-monitor"}' | python3 -c 'import sys,json; d=json.load(sys.stdin); print("Route result:", d.get("success"), d.get("result",{}).get("id"), d.get("errors"))'
+          else
+            echo "Route already exists: $ROUTE"
+          fi
+          python3 - "https://$HOST" "$API_SECRET" "$D1_ID" <<'PY' > result.json
           import json,sys
           print(json.dumps({"worker_url":sys.argv[1],"api_secret":sys.argv[2],"d1_id":sys.argv[3]},indent=1))
           PY
-          echo "WORKER_URL=$URL"
+          echo "WORKER_URL=https://$HOST"
       - uses: actions/upload-artifact@v4
         with:
           name: cfsm-deploy-result
